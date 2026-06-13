@@ -55,6 +55,12 @@ async def book_flight(
         },
     )
 
+async def cancel_flight_booking(booking_id: str) -> dict[str, Any]:
+    return await _request(
+        "POST",
+        f"{flight_service_url()}/flight-bookings/{booking_id}/cancel",
+    )
+
 
 async def get_hotel(hotel_id: str) -> dict[str, Any]:
     return await _request("GET", f"{hotel_service_url()}/hotels/{hotel_id}")
@@ -80,6 +86,13 @@ async def reserve_hotel(
             "delay_after_check_ms": delay_after_check_ms,
             "force_fail": force_fail,
         },
+    )
+
+
+async def cancel_hotel_reservation(reservation_id: str) -> dict[str, Any]:
+    return await _request(
+        "POST",
+        f"{hotel_service_url()}/hotel-reservations/{reservation_id}/cancel",
     )
 
 
