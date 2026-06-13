@@ -111,8 +111,38 @@ async def create_trip(request: CreateTripRequest) -> dict:
             error_message=None,
         )
     except Exception as exc:
-        failed = await db.update_trip(trip_id, status="FAILED", error_message=str(exc))
-        raise HTTPException(status_code=502, detail={"trip_id": str(trip_id), "error": failed["error_message"]})
+
+        # compensate hotel
+        if trip.get("hotel_reservation_id"):
+            try:
+                await clients.cancel_hotel_reservation(
+                    str(trip["hotel_reservation_id"])
+                )
+            except Exception:
+                logging.exception("Hotel compensation failed")
+
+        # compensate flight
+        if trip.get("flight_booking_id"):
+            try:
+                await clients.cancel_flight_booking(
+                    str(trip["flight_booking_id"])
+                )
+            except Exception:
+                logging.exception("Flight compensation failed")
+
+        failed = await db.update_trip(
+            trip_id,
+            status="FAILED",
+            error_message=str(exc),
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "trip_id": str(trip_id),
+                "error": failed["error_message"],
+            },
+        )
 
     try:
         await events.publish_confirmation(trip, publish_twice=request.simulate.publish_event_twice)

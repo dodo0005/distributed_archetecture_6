@@ -121,3 +121,8 @@ For limited-surface concepts such as idempotency keys, the expected implementati
 You must document your work by adding a `## Exam refactor` section to this README and by creating one concept card per implemented concept under `docs/concepts/`.
 
 Do not assume the starter app is correct. Its flaws are the point of the exercise.
+
+## Exam refactor
+
+| Concept | Category | Main files modified | How to test it |
+|compensation path for a distributed operation|category B| trip_service/clients.py, trip_service/main.py, scripts/demo_partial_failure.py,flight_service/main.py,hotel_service/main.py|run docker compose run --rm tools python scripts/demo_partial_failure.py|
