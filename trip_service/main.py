@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from contextlib import asynccontextmanager
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
+from fastapi.encoders import jsonable_encoder
 
 from shared.logging import configure_logging
 from trip_service import clients, db, events
@@ -55,8 +58,17 @@ async def get_trip(trip_id: UUID) -> dict:
     return trip
 
 
-@app.post("/trips")
-async def create_trip(request: CreateTripRequest) -> dict:
+def request_hash(request: CreateTripRequest) -> str:
+    try:
+        payload = request.model_dump(mode="json")
+    except AttributeError:
+        payload = request.dict()
+
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+async def create_trip_without_idempotency(request: CreateTripRequest) -> dict:
     trip = await db.create_trip(
         user_id=request.user_id,
         traveler_name=request.traveler_name,
@@ -68,8 +80,9 @@ async def create_trip(request: CreateTripRequest) -> dict:
 
     try:
         # INTENTIONAL NAIVE DESIGN:
-        # This is a plain sequence of remote calls. There is no saga state
-        # machine, compensation, TCC, 2PC, retry policy, or idempotency key.
+        # This is still the original sequence of remote calls.
+        # The idempotency key is handled at the API boundary so that
+        # duplicate client retries do not repeat this whole sequence.
         flight_booking = await clients.book_flight(
             flight_id=request.flight_id,
             trip_id=str(trip_id),
@@ -111,38 +124,8 @@ async def create_trip(request: CreateTripRequest) -> dict:
             error_message=None,
         )
     except Exception as exc:
-
-        # compensate hotel
-        if trip.get("hotel_reservation_id"):
-            try:
-                await clients.cancel_hotel_reservation(
-                    str(trip["hotel_reservation_id"])
-                )
-            except Exception:
-                logging.exception("Hotel compensation failed")
-
-        # compensate flight
-        if trip.get("flight_booking_id"):
-            try:
-                await clients.cancel_flight_booking(
-                    str(trip["flight_booking_id"])
-                )
-            except Exception:
-                logging.exception("Flight compensation failed")
-
-        failed = await db.update_trip(
-            trip_id,
-            status="FAILED",
-            error_message=str(exc),
-        )
-
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "trip_id": str(trip_id),
-                "error": failed["error_message"],
-            },
-        )
+        failed = await db.update_trip(trip_id, status="FAILED", error_message=str(exc))
+        raise HTTPException(status_code=502, detail={"trip_id": str(trip_id), "error": failed["error_message"]})
 
     try:
         await events.publish_confirmation(trip, publish_twice=request.simulate.publish_event_twice)
@@ -154,3 +137,60 @@ async def create_trip(request: CreateTripRequest) -> dict:
 
     return trip
 
+
+@app.post("/trips")
+async def create_trip(
+    request: CreateTripRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> dict:
+    if idempotency_key is None:
+        return await create_trip_without_idempotency(request)
+
+    idempotency_key = idempotency_key.strip()
+    if not idempotency_key:
+        raise HTTPException(status_code=400, detail="Idempotency-Key cannot be empty")
+
+    current_request_hash = request_hash(request)
+    idempotency_record = await db.start_idempotency(idempotency_key, current_request_hash)
+
+    if not idempotency_record["is_new"]:
+        if idempotency_record["request_hash"] != current_request_hash:
+            raise HTTPException(
+                status_code=409,
+                detail="This Idempotency-Key was already used with a different request body",
+            )
+
+        if idempotency_record["status"] == "COMPLETED":
+            if idempotency_record["http_status"] >= 400:
+                raise HTTPException(
+                    status_code=idempotency_record["http_status"],
+                    detail=idempotency_record["response_body"],
+                )
+            return idempotency_record["response_body"]
+
+        raise HTTPException(
+            status_code=409,
+            detail="A request with this Idempotency-Key is already in progress",
+        )
+
+    try:
+        trip = await create_trip_without_idempotency(request)
+    except HTTPException as exc:
+        await db.finish_idempotency(
+            key=idempotency_key,
+            status="COMPLETED",
+            http_status=exc.status_code,
+            response_body=exc.detail,
+        )
+        raise
+
+    response_body = jsonable_encoder(trip)
+
+    await db.finish_idempotency(
+        key=idempotency_key,
+        status="COMPLETED",
+        http_status=200,
+        response_body=response_body,
+    )
+
+    return response_body
