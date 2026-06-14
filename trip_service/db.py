@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from typing import Any
 from uuid import UUID, uuid4
@@ -60,8 +61,23 @@ async def init_db() -> None:
         """
     )
 
+    await get_pool().execute(
+        """
+        CREATE TABLE IF NOT EXISTS idempotency_keys (
+            key TEXT PRIMARY KEY,
+            request_hash TEXT NOT NULL,
+            status TEXT NOT NULL,
+            http_status INTEGER,
+            response_body JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """
+    )
+
 
 async def reset_db() -> None:
+    await get_pool().execute("DELETE FROM idempotency_keys")
     await get_pool().execute("DELETE FROM trips")
 
 
@@ -108,7 +124,65 @@ async def get_trip(trip_id: UUID) -> dict | None:
     return dict(row) if row else None
 
 
+def _decode_response_body(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
+
+
+async def start_idempotency(key: str, request_hash: str) -> dict:
+    row = await get_pool().fetchrow(
+        """
+        INSERT INTO idempotency_keys (key, request_hash, status)
+        VALUES ($1, $2, 'IN_PROGRESS')
+        ON CONFLICT (key) DO NOTHING
+        RETURNING *
+        """,
+        key,
+        request_hash,
+    )
+
+    if row is not None:
+        result = dict(row)
+        result["is_new"] = True
+        result["response_body"] = _decode_response_body(result["response_body"])
+        return result
+
+    existing = await get_pool().fetchrow(
+        "SELECT * FROM idempotency_keys WHERE key = $1",
+        key,
+    )
+    result = dict(existing)
+    result["is_new"] = False
+    result["response_body"] = _decode_response_body(result["response_body"])
+    return result
+
+
+async def finish_idempotency(
+    *,
+    key: str,
+    status: str,
+    http_status: int,
+    response_body: Any,
+) -> None:
+    await get_pool().execute(
+        """
+        UPDATE idempotency_keys
+        SET status = $2,
+            http_status = $3,
+            response_body = $4::jsonb,
+            updated_at = now()
+        WHERE key = $1
+        """,
+        key,
+        status,
+        http_status,
+        json.dumps(response_body),
+    )
+
+
 async def state() -> dict[str, list[dict]]:
     rows = await get_pool().fetch("SELECT * FROM trips ORDER BY created_at, id")
     return {"trips": [dict(row) for row in rows]}
-
