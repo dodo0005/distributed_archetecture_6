@@ -2,6 +2,7 @@
 
 ## Category
 A — A1: Integrity and atomicity
+database transaction
 
 ## Problem
 The baseline booking operations in flight_service and hotel_service perform two writes as separate database calls: first decrement available inventory, then insert a booking record. A failure between these two steps leaves the database in partial, inconsistent state inventory decremented but no booking created.
