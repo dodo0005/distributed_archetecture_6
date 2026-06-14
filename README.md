@@ -129,3 +129,4 @@ Do not assume the starter app is correct. Its flaws are the point of the exercis
 
 | Database Transaction | A — A1 | flight_service/main.py, hotel_service/main.py | python scripts/demo_atomicity.py (DEMO 1) |
 | Database Constraints | A — A1 | flight_service/db.py, hotel_service/db.py | python scripts/demo_atomicity.py (DEMO 2) |
+| Idempotency key for client trip request | C | trip_service/db.py, trip_service/main.py, scripts/demo_idempotency_key.py | docker compose run --rm tools python scripts/demo_idempotency_key.py |

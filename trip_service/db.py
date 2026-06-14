@@ -4,6 +4,7 @@ import asyncio
 import os
 from typing import Any
 from uuid import UUID, uuid4
+import json
 
 import asyncpg
 
@@ -59,9 +60,23 @@ async def init_db() -> None:
         )
         """
     )
+    await get_pool().execute(
+        """
+        CREATE TABLE IF NOT EXISTS trip_idempotency_keys (
+            idempotency_key TEXT PRIMARY KEY,
+            request_hash TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('IN_PROGRESS', 'COMPLETED', 'FAILED')),
+            response_status INTEGER,
+            response_body JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """
+    )
 
 
 async def reset_db() -> None:
+    await get_pool().execute("DELETE FROM trip_idempotency_keys")
     await get_pool().execute("DELETE FROM trips")
 
 
@@ -112,3 +127,76 @@ async def state() -> dict[str, list[dict]]:
     rows = await get_pool().fetch("SELECT * FROM trips ORDER BY created_at, id")
     return {"trips": [dict(row) for row in rows]}
 
+
+
+async def begin_idempotent_request(idempotency_key: str, request_hash: str) -> dict:
+    inserted = await get_pool().fetchrow(
+        """
+        INSERT INTO trip_idempotency_keys (
+            idempotency_key,
+            request_hash,
+            status
+        )
+        VALUES ($1, $2, 'IN_PROGRESS')
+        ON CONFLICT DO NOTHING
+        RETURNING idempotency_key
+        """,
+        idempotency_key,
+        request_hash,
+    )
+
+    if inserted:
+        return {"action": "started"}
+
+    row = await get_pool().fetchrow(
+        """
+        SELECT request_hash, status, response_status, response_body
+        FROM trip_idempotency_keys
+        WHERE idempotency_key = $1
+        """,
+        idempotency_key,
+    )
+
+    if row is None:
+        return {"action": "started"}
+
+    if row["request_hash"] != request_hash:
+        return {"action": "conflict"}
+
+    if row["status"] in ("COMPLETED", "FAILED"):
+        response_body = row["response_body"]
+
+        if isinstance(response_body, str):
+            response_body = json.loads(response_body)
+
+        return {
+            "action": "replay",
+            "response_status": row["response_status"],
+            "response_body": response_body,
+        }
+
+    return {"action": "in_progress"}
+
+
+async def finish_idempotent_request(
+    idempotency_key: str,
+    *,
+    status: str,
+    response_status: int,
+    response_body: dict,
+) -> None:
+    await get_pool().execute(
+        """
+        UPDATE trip_idempotency_keys
+        SET
+            status = $2,
+            response_status = $3,
+            response_body = $4::jsonb,
+            updated_at = now()
+        WHERE idempotency_key = $1
+        """,
+        idempotency_key,
+        status,
+        response_status,
+        json.dumps(response_body),
+    )
