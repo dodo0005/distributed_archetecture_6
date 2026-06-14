@@ -126,3 +126,6 @@ Do not assume the starter app is correct. Its flaws are the point of the exercis
 
 | Concept | Category | Main files modified | How to test it |
 |compensation path for a distributed operation|category B| trip_service/clients.py, trip_service/main.py, scripts/demo_partial_failure.py,flight_service/main.py,hotel_service/main.py|run docker compose run --rm tools python scripts/demo_partial_failure.py|
+
+| Database Transaction | A — A1 | flight_service/main.py, hotel_service/main.py | python scripts/demo_atomicity.py (DEMO 1) |
+| Database Constraints | A — A1 | flight_service/db.py, hotel_service/db.py | python scripts/demo_atomicity.py (DEMO 2) |
