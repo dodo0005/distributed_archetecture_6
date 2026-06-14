@@ -63,6 +63,12 @@ async def init_db() -> None:
         )
         """
     )
+    await db.execute(
+        "ALTER TABLE hotels DROP CONSTRAINT IF EXISTS chk_rooms_non_negative"
+    )
+    await db.execute(
+        "ALTER TABLE hotels ADD CONSTRAINT chk_rooms_non_negative CHECK (rooms_available >= 0)"
+    )
     await seed_db()
 
 
