@@ -45,12 +45,14 @@ def wait_for_notifications(trip_id: str, minimum: int) -> list[dict]:
         return client.get(f"{NOTIFICATION_URL}/notifications/{trip_id}").json()
 
 
-def test_duplicate_request_is_not_idempotent_in_baseline() -> None:
+def test_duplicate_request_with_same_idempotency_key_is_idempotent() -> None:
     reset_all()
     payload = trip_payload()
+    headers = {"Idempotency-Key": "duplicate-trip-test-1"}
+
     with httpx.Client(timeout=15) as client:
-        first = client.post(f"{TRIP_URL}/trips", json=payload)
-        second = client.post(f"{TRIP_URL}/trips", json=payload)
+        first = client.post(f"{TRIP_URL}/trips", json=payload, headers=headers)
+        second = client.post(f"{TRIP_URL}/trips", json=payload, headers=headers)
         trips = client.get(f"{TRIP_URL}/trips").json()
         flight_state = client.get(f"{FLIGHT_URL}/debug/state").json()
         hotel_state = client.get(f"{HOTEL_URL}/debug/state").json()
@@ -58,11 +60,30 @@ def test_duplicate_request_is_not_idempotent_in_baseline() -> None:
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert first.json()["id"] != second.json()["id"]
-    assert len(trips) == 2
-    assert len(flight_state["flight_bookings"]) == 2
-    assert len(hotel_state["hotel_reservations"]) == 2
-    assert len(payment_state["payment_authorizations"]) == 2
+    assert first.json()["id"] == second.json()["id"]
+    assert len(trips) == 1
+    assert len(flight_state["flight_bookings"]) == 1
+    assert len(hotel_state["hotel_reservations"]) == 1
+    assert len(payment_state["payment_authorizations"]) == 1
+
+
+def test_same_idempotency_key_with_different_body_is_rejected() -> None:
+    reset_all()
+
+    first_payload = trip_payload()
+    second_payload = trip_payload()
+    second_payload["nights"] = 3
+
+    headers = {"Idempotency-Key": "same-key-different-body-test"}
+
+    with httpx.Client(timeout=15) as client:
+        first = client.post(f"{TRIP_URL}/trips", json=first_payload, headers=headers)
+        second = client.post(f"{TRIP_URL}/trips", json=second_payload, headers=headers)
+        trips = client.get(f"{TRIP_URL}/trips").json()
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert len(trips) == 1
 
 
 def test_payment_failure_leaves_reserved_resources_in_baseline() -> None:
