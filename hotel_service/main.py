@@ -65,33 +65,32 @@ async def reserve_hotel(hotel_id: str, request: HotelReservationRequest) -> dict
     if hotel is None:
         raise HTTPException(status_code=404, detail="Hotel not found")
 
-    # INTENTIONAL NAIVE DESIGN:
-    # This check/update is not protected by a transaction or row lock.
-    # Several concurrent requests can pass this check before any decrement is visible.
     if hotel["rooms_available"] < request.rooms:
         raise HTTPException(status_code=409, detail="Not enough rooms available")
 
     await maybe_delay(request.delay_after_check_ms)
 
-    await pool.execute(
-        "UPDATE hotels SET rooms_available = rooms_available - $1 WHERE id = $2",
-        request.rooms,
-        hotel_id,
-    )
-    reservation_id = uuid4()
-    reservation = await pool.fetchrow(
-        """
-        INSERT INTO hotel_reservations (id, trip_id, hotel_id, traveler_name, nights, rooms, status)
-        VALUES ($1, $2, $3, $4, $5, $6, 'CONFIRMED')
-        RETURNING *
-        """,
-        reservation_id,
-        request.trip_id,
-        hotel_id,
-        request.traveler_name,
-        request.nights,
-        request.rooms,
-    )
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            reservation_id = uuid4()
+            reservation = await conn.fetchrow(
+                """
+                INSERT INTO hotel_reservations (id, trip_id, hotel_id, traveler_name, nights, rooms, status)
+                VALUES ($1, $2, $3, $4, $5, $6, 'CONFIRMED')
+                RETURNING *
+                """,
+                reservation_id,
+                request.trip_id,
+                hotel_id,
+                request.traveler_name,
+                request.nights,
+                request.rooms,
+            )
+            await conn.execute(
+                "UPDATE hotels SET rooms_available = rooms_available - $1 WHERE id = $2",
+                request.rooms,
+                hotel_id,
+            )
     return dict(reservation)
 
 
@@ -102,20 +101,19 @@ async def cancel_reservation(reservation_id: UUID) -> dict:
     if reservation is None:
         raise HTTPException(status_code=404, detail="Hotel reservation not found")
 
-    # INTENTIONAL NAIVE DESIGN:
-    # Cancellation is not idempotent; calling this twice increments rooms twice.
-
     if reservation["status"] == "CANCELLED":
         return dict(reservation)
-    
-    updated = await pool.fetchrow(
-        "UPDATE hotel_reservations SET status = 'CANCELLED' WHERE id = $1 RETURNING *",
-        reservation_id,
-    )
-    await pool.execute(
-        "UPDATE hotels SET rooms_available = rooms_available + $1 WHERE id = $2",
-        reservation["rooms"],
-        reservation["hotel_id"],
-    )
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            updated = await conn.fetchrow(
+                "UPDATE hotel_reservations SET status = 'CANCELLED' WHERE id = $1 RETURNING *",
+                reservation_id,
+            )
+            await conn.execute(
+                "UPDATE hotels SET rooms_available = rooms_available + $1 WHERE id = $2",
+                reservation["rooms"],
+                reservation["hotel_id"],
+            )
     return dict(updated)
 

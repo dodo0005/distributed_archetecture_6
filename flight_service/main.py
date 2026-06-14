@@ -62,36 +62,34 @@ async def book_flight(flight_id: str, request: FlightBookingRequest) -> dict:
     if flight is None:
         raise HTTPException(status_code=404, detail="Flight not found")
 
-    # INTENTIONAL NAIVE DESIGN:
-    # This check/update is not protected by a transaction or row lock.
-    # Several concurrent requests can pass this check before any decrement is visible.
     if flight["seats_available"] < request.seats:
         raise HTTPException(status_code=409, detail="Not enough seats available")
 
     await maybe_delay(request.delay_after_check_ms)
 
-    await pool.execute(
-        "UPDATE flights SET seats_available = seats_available - $1 WHERE id = $2",
-        request.seats,
-        flight_id,
-    )
-
     if request.fail_after_decrement:
         raise HTTPException(status_code=500, detail="Forced failure after decrement")
 
-    booking_id = uuid4()
-    booking = await pool.fetchrow(
-        """
-        INSERT INTO flight_bookings (id, trip_id, flight_id, traveler_name, seats, status)
-        VALUES ($1, $2, $3, $4, $5, 'CONFIRMED')
-        RETURNING *
-        """,
-        booking_id,
-        request.trip_id,
-        flight_id,
-        request.traveler_name,
-        request.seats,
-    )
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            booking_id = uuid4()
+            booking = await conn.fetchrow(
+                """
+                INSERT INTO flight_bookings (id, trip_id, flight_id, traveler_name, seats, status)
+                VALUES ($1, $2, $3, $4, $5, 'CONFIRMED')
+                RETURNING *
+                """,
+                booking_id,
+                request.trip_id,
+                flight_id,
+                request.traveler_name,
+                request.seats,
+            )
+            await conn.execute(
+                "UPDATE flights SET seats_available = seats_available - $1 WHERE id = $2",
+                request.seats,
+                flight_id,
+            )
     return dict(booking)
 
 
@@ -102,19 +100,19 @@ async def cancel_booking(booking_id: UUID) -> dict:
     if booking is None:
         raise HTTPException(status_code=404, detail="Flight booking not found")
 
-    # INTENTIONAL NAIVE DESIGN:
-    # Cancellation is not idempotent; calling this twice increments seats twice.
     if booking["status"] == "CANCELLED":
         return dict(booking)
 
-    updated = await pool.fetchrow(
-        "UPDATE flight_bookings SET status = 'CANCELLED' WHERE id = $1 RETURNING *",
-        booking_id,
-    )
-    await pool.execute(
-        "UPDATE flights SET seats_available = seats_available + $1 WHERE id = $2",
-        booking["seats"],
-        booking["flight_id"],
-    )
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            updated = await conn.fetchrow(
+                "UPDATE flight_bookings SET status = 'CANCELLED' WHERE id = $1 RETURNING *",
+                booking_id,
+            )
+            await conn.execute(
+                "UPDATE flights SET seats_available = seats_available + $1 WHERE id = $2",
+                booking["seats"],
+                booking["flight_id"],
+            )
     return dict(updated)
 
