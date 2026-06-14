@@ -67,8 +67,6 @@ async def book_flight(flight_id: str, request: FlightBookingRequest) -> dict:
 
     await maybe_delay(request.delay_after_check_ms)
 
-    if request.fail_after_decrement:
-        raise HTTPException(status_code=500, detail="Forced failure after decrement")
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -90,6 +88,8 @@ async def book_flight(flight_id: str, request: FlightBookingRequest) -> dict:
                 request.seats,
                 flight_id,
             )
+            if request.fail_after_decrement:
+                raise HTTPException(status_code=500, detail="Forced failure after decrement")
     return dict(booking)
 
 
@@ -116,3 +116,20 @@ async def cancel_booking(booking_id: UUID) -> dict:
             )
     return dict(updated)
 
+
+@app.post("/debug/force-negative")
+async def force_negative():
+    pool = db.get_pool()
+
+    try:
+        await pool.execute(
+            """
+            UPDATE flights
+            SET seats_available = -1
+            WHERE id = 'FL-ONE-SEAT'
+            """
+        )
+        return {"status": "unexpected success"}
+
+    except Exception as e:
+        return {"status": "constraint triggered", "error": str(e)}

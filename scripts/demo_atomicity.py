@@ -50,7 +50,7 @@ print(f"    Response: {r.status_code}")
 print("\n[3] State after successful booking:")
 print_state()
 
-print("\n[4] Reset and now try with forced failure BEFORE transaction")
+print("\n[4] Reset and now try with forced failure INSIDE transaction")
 httpx.post(f"{FLIGHT_URL}/admin/reset")
 r = httpx.post(
     f"{FLIGHT_URL}/flights/FL-ONE-SEAT/bookings",
@@ -78,32 +78,12 @@ print("\n[1] Reset state")
 httpx.post(f"{FLIGHT_URL}/admin/reset")
 print_state()
 
-print("\n[2] Book the only seat (FL-ONE-SEAT has 1 seat)")
-r = httpx.post(
-    f"{FLIGHT_URL}/flights/FL-ONE-SEAT/bookings",
-    json={
-        "trip_id": TRIP_ID,
-        "traveler_name": "Alice",
-        "seats": 1,
-        "fail_after_decrement": False,
-        "delay_after_check_ms": 0,
-    },
-)
-print(f"    Response: {r.status_code}")
+print("\n[2] Attempt to force seats_available = -1")
+r = httpx.post(f"{FLIGHT_URL}/debug/force-negative")
 
-print("\n[3] Try to book again (0 seats left — should be rejected)")
-r = httpx.post(
-    f"{FLIGHT_URL}/flights/FL-ONE-SEAT/bookings",
-    json={
-        "trip_id": TRIP_ID,
-        "traveler_name": "Bob",
-        "seats": 1,
-        "fail_after_decrement": False,
-        "delay_after_check_ms": 0,
-    },
-)
-print(f"    Response: {r.status_code} — {r.json()}")
+print(f"Response: {r.status_code}")
+print(r.json())
 
-print("\n[4] Final state:")
+print("\n[3] State after constraint violation")
 print_state()
-print("\nSecond booking rejected, seats never went negative → constraint works.")
+print("\nDatabase rejected an attempt to set seats_available = -1, and the value remained unchanged → CHECK constraint works.")

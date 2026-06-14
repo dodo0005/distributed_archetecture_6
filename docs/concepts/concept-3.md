@@ -2,6 +2,7 @@
 
 ## Category
 A — A1: Integrity and atomicity
+database constraints
 
 ## Problem
 The baseline application only checks seat/room availability in application code before writing. The database itself has no rule preventing inventory from going negative. A bug, a race condition, or a concurrent request could bypass the application-level check and write an invalid value directly to the database.
