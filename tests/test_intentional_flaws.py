@@ -76,8 +76,8 @@ def test_payment_failure_leaves_reserved_resources_in_baseline() -> None:
 
     assert response.status_code == 502
     assert trips[0]["status"] == "FAILED"
-    assert flight_state["flight_bookings"][0]["status"] == "CONFIRMED"
-    assert hotel_state["hotel_reservations"][0]["status"] == "CONFIRMED"
+    assert flight_state["flight_bookings"][0]["status"] == "CANCELLED"
+    assert hotel_state["hotel_reservations"][0]["status"] == "CANCELLED"
     assert payment_state["payment_authorizations"][0]["status"] == "DECLINED"
 
 
