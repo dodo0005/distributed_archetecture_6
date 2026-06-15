@@ -22,19 +22,27 @@ async def try_book(client: httpx.AsyncClient) -> httpx.Response:
 
 
 async def run_race() -> None:
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=30) as client:
         responses = await asyncio.gather(*[try_book(client) for _ in range(20)])
         state = (await client.get(f"{FLIGHT_URL}/debug/state")).json()
 
-    successful = [response for response in responses if response.status_code == 200]
-    rejected = [response for response in responses if response.status_code == 409]
-    one_seat = next(flight for flight in state["flights"] if flight["id"] == "FL-ONE-SEAT")
+    successful = [r for r in responses if r.status_code == 200]
+    rejected = [r for r in responses if r.status_code == 409]
+    errors = [r for r in responses if r.status_code not in (200, 409)]
+    one_seat = next(f for f in state["flights"] if f["id"] == "FL-ONE-SEAT")
 
-    print(f"Successful bookings: {len(successful)}")
-    print(f"Rejected bookings: {len(rejected)}")
+    print(f"Successful bookings : {len(successful)}")
+    print(f"Rejected (409)      : {len(rejected)}")
+    print(f"Unexpected errors   : {len(errors)}")
     print(f"Final seats_available: {one_seat['seats_available']}")
-    print("This demonstrates a race condition.")
-    print("Final flight state:")
+
+    assert len(successful) == 1, f"FAIL: expected exactly 1 success, got {len(successful)}"
+    assert one_seat["seats_available"] == 0, f"FAIL: seats should be 0, got {one_seat['seats_available']}"
+    assert len(errors) == 0, f"FAIL: unexpected error responses: {[r.text for r in errors]}"
+
+    print("\nPASS: pessimistic locking prevented overbooking.")
+    print("Exactly 1 booking succeeded. All others received a clean 409.")
+    print("\nFinal flight state:")
     print(pretty(state))
 
 

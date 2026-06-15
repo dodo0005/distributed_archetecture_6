@@ -9,7 +9,7 @@ even if application code tries to force it.
 """
 import httpx
 
-FLIGHT_URL = "http://localhost:8001"
+from common import FLIGHT_URL
 TRIP_ID = "00000000-0000-0000-0000-000000000001"
 
 
