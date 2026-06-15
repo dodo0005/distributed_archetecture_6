@@ -61,17 +61,20 @@ async def reserve_hotel(hotel_id: str, request: HotelReservationRequest) -> dict
         raise HTTPException(status_code=500, detail="Forced hotel failure")
 
     pool = db.get_pool()
-    hotel = await pool.fetchrow("SELECT * FROM hotels WHERE id = $1", hotel_id)
-    if hotel is None:
-        raise HTTPException(status_code=404, detail="Hotel not found")
-
-    if hotel["rooms_available"] < request.rooms:
-        raise HTTPException(status_code=409, detail="Not enough rooms available")
-
-    await maybe_delay(request.delay_after_check_ms)
-
     async with pool.acquire() as conn:
         async with conn.transaction():
+            hotel = await conn.fetchrow(
+                "SELECT * FROM hotels WHERE id = $1 FOR UPDATE",
+                hotel_id,
+            )
+            if hotel is None:
+                raise HTTPException(status_code=404, detail="Hotel not found")
+
+            if hotel["rooms_available"] < request.rooms:
+                raise HTTPException(status_code=409, detail="Not enough rooms available")
+
+            await maybe_delay(request.delay_after_check_ms)
+
             reservation_id = uuid4()
             reservation = await conn.fetchrow(
                 """

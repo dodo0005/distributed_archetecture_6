@@ -58,18 +58,20 @@ async def get_flight(flight_id: str) -> dict:
 @app.post("/flights/{flight_id}/bookings")
 async def book_flight(flight_id: str, request: FlightBookingRequest) -> dict:
     pool = db.get_pool()
-    flight = await pool.fetchrow("SELECT * FROM flights WHERE id = $1", flight_id)
-    if flight is None:
-        raise HTTPException(status_code=404, detail="Flight not found")
-
-    if flight["seats_available"] < request.seats:
-        raise HTTPException(status_code=409, detail="Not enough seats available")
-
-    await maybe_delay(request.delay_after_check_ms)
-
-
     async with pool.acquire() as conn:
         async with conn.transaction():
+            flight = await conn.fetchrow(
+                "SELECT * FROM flights WHERE id = $1 FOR UPDATE",
+                flight_id,
+            )
+            if flight is None:
+                raise HTTPException(status_code=404, detail="Flight not found")
+
+            if flight["seats_available"] < request.seats:
+                raise HTTPException(status_code=409, detail="Not enough seats available")
+
+            await maybe_delay(request.delay_after_check_ms)
+
             booking_id = uuid4()
             booking = await conn.fetchrow(
                 """
